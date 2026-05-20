@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import NamedTuple, Optional
@@ -19,10 +20,29 @@ from sglang.srt.layers.moe.token_dispatcher.base import (
     DispatchOutputFormat,
 )
 from sglang.srt.layers.moe.topk import TopKOutput
-from sglang.srt.layers.moe.utils import DeepEPMode
+from sglang.srt.layers.moe.utils import DeepEPMode, get_moe_runner_backend
 from sglang.srt.utils import get_int_env_var
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_mooncake_dispatch_use_fp8() -> bool:
+    dispatch_dtype = os.getenv("SGLANG_MOONCAKE_EP_DISPATCH_DTYPE", "auto").lower()
+    if dispatch_dtype not in ("auto", "bf16", "fp8"):
+        raise ValueError(
+            "SGLANG_MOONCAKE_EP_DISPATCH_DTYPE must be one of "
+            f"'auto', 'bf16', or 'fp8', got {dispatch_dtype!r}."
+        )
+    if dispatch_dtype == "fp8":
+        return True
+    if dispatch_dtype == "bf16":
+        return False
+
+    # DeepGEMM consumes FP8 activations plus per-token scales. The Triton BF16
+    # expert runner can use Mooncake EP's native BF16 dispatch and avoid the
+    # dispatch-time FP8 cast. Keep the legacy FP8 default for unresolved/auto
+    # runner selection, where FP8 models may choose DeepGEMM later.
+    return not get_moe_runner_backend().is_triton()
 
 
 class MooncakeDispatchOutput(NamedTuple):
@@ -144,6 +164,11 @@ class _MooncakeEPDispatcherImpl:
         self.timeout_us = 10000000
 
         self.handle = None
+        self.dispatch_use_fp8 = _resolve_mooncake_dispatch_use_fp8()
+        logger.info(
+            "Mooncake EP dispatch dtype resolved to %s",
+            "fp8" if self.dispatch_use_fp8 else "bf16",
+        )
 
     def dispatch_a(
         self,
@@ -160,7 +185,7 @@ class _MooncakeEPDispatcherImpl:
         hidden_states, masked_m, event, hook = self._dispatch_core(
             hidden_states,
             topk_ids,
-            use_fp8=True,
+            use_fp8=self.dispatch_use_fp8,
         )
         return (
             hidden_states,

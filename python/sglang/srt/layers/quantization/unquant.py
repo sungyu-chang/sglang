@@ -416,7 +416,6 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
         from sglang.srt.layers.moe.token_dispatcher import StandardCombineInput
 
         x = dispatch_output.hidden_states
-        topk_output = dispatch_output.topk_output
 
         moe_runner_config = self.moe_runner_config
 
@@ -434,6 +433,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, MultiPlatformOp):
             )
             return self.runner.run(dispatch_output, quant_info)
         elif self.use_flashinfer_cutlass:
+            topk_output = dispatch_output.topk_output
             output = flashinfer_cutlass_fused_moe(
                 input=x,
                 token_selected_experts=topk_output.topk_ids,

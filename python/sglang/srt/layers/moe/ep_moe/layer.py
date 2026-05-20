@@ -38,6 +38,7 @@ from sglang.srt.layers.quantization.compressed_tensors.schemes import (
 from sglang.srt.layers.quantization.fp8 import Fp8Config, Fp8MoEMethod
 from sglang.srt.layers.quantization.fp8_kernel import is_fp8_fnuz
 from sglang.srt.layers.quantization.quark.schemes import QuarkW4A4MXFp4MoE
+from sglang.srt.layers.quantization.unquant import UnquantizedFusedMoEMethod
 from sglang.srt.layers.quantization.w4afp8 import W4AFp8Config, W4AFp8MoEMethod
 from sglang.srt.utils import get_bool_env_var, get_int_env_var, is_hip, is_npu
 
@@ -131,11 +132,17 @@ class DeepEPMoE(FusedMoE):
             self.use_block_quant = False
 
         self.deepep_mode = get_deepep_mode()
+        use_mooncake_triton_unquantized = (
+            get_moe_a2a_backend().is_mooncake()
+            and get_moe_runner_backend().is_triton()
+            and isinstance(self.quant_method, UnquantizedFusedMoEMethod)
+        )
 
         if (
             self.deepep_mode.enable_low_latency()
             and not _is_npu
             and not _is_hip
+            and not use_mooncake_triton_unquantized
             and not (
                 get_moe_runner_backend().is_flashinfer_cutedsl()
                 and self.quant_config.get_name() == "modelopt_fp4"
@@ -223,6 +230,17 @@ class DeepEPMoE(FusedMoE):
             )
 
         from sglang.srt.layers.moe.token_dispatcher import DispatchOutputChecker
+
+        if (
+            get_moe_a2a_backend().is_mooncake()
+            and get_moe_runner_backend().is_triton()
+            and isinstance(self.quant_method, UnquantizedFusedMoEMethod)
+            and DispatchOutputChecker.format_is_deepep_ll(dispatch_output)
+        ):
+            return self.quant_method.apply(
+                layer=self,
+                dispatch_output=dispatch_output,
+            )
 
         if _use_aiter:
             assert DispatchOutputChecker.format_is_deepep(dispatch_output)
